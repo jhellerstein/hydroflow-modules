@@ -1,0 +1,13 @@
+// use chrono::Utc;
+
+// Define a shared inbound channel
+mod -> inbound;
+inbound = tee();
+
+// Ack back the messages
+inbound[0]
+    -> map(|(RetryMsg {msg_id, payload:_}, addr)| (Message::RetryAck { msg_id }, addr) ) -> [acks]mod;
+
+// Pass along the messages
+inbound[1]
+    -> map(|(RetryMsg {msg_id:_, payload}, addr)| (payload, addr)) -> [output]mod;

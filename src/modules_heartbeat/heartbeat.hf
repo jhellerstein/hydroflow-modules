@@ -1,0 +1,31 @@
+mod_out = union() -> mod;
+mod[members] 
+    -> map(|addr| hydroflow::util::PersistenceKeyed::Persist(addr, Utc::now())) 
+    -> hb_members;
+hb_members = union() -> persist_mut_keyed() -> tee();
+
+// every k milliseconds, broadcast heartbeat messages to members
+source_interval(Duration::from_millis(100))
+    -> map(|_| Message::HeartbeatMsg)
+    -> [0]hb_broadcast;
+hb_members -> map(|(a, _)| a) -> [1]hb_broadcast;
+hb_broadcast = cross_join::<'tick, 'tick>()
+    -> mod_out;
+
+// reset timer upon response
+mod[response]
+    -> flat_map(|(addr,)| [hydroflow::util::PersistenceKeyed::Delete(addr), hydroflow::util::PersistenceKeyed::Persist(addr, Utc::now())])
+    -> hb_members;
+
+mod[msg] -> null();
+mod[disconnect] -> null();
+
+
+// every l seconds look for overdue heartbeats
+source_interval(Duration::from_secs(3)) -> [1]gate;
+hb_members -> [0]gate;
+gate = cross_join::<'tick, 'tick>() -> map(|(m, _)| m);
+tardy = gate -> filter(|(_a, t): &(SocketAddr, DateTime<Utc>)| (Utc::now() - *t).num_seconds() > 1) -> tee();
+tardy -> map(|(a,_t)| (Message::HeartbeatDisconnect, a)) -> mod_out;
+tardy -> map(|(a, _)| hydroflow::util::PersistenceKeyed::Delete(a))
+    -> hb_members;

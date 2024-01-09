@@ -1,0 +1,33 @@
+// use std::time::Duration;
+
+// take input, wrap in a RetryMsg.
+// then send 1 copy to output immediately,
+// another copy gets saved in retries, waiting for ack or timeout to retry
+mod[input] 
+    -> enumerate::<'static>()
+    -> map(|(seqno, item)| (item, seqno))
+    -> send_and_retry;
+send_and_retry = tee();
+// send
+send_and_retry 
+    -> map(|((payload, addr), msg_id)| (RetryMsg{msg_id, payload}, addr))
+    -> mod_out;
+// retry
+send_and_retry 
+    -> map(|((payload, addr), msg_id)| hydroflow::util::PersistenceKeyed::Persist(msg_id, (payload, addr)))
+    -> retries;
+
+retries = union() -> persist_mut_keyed();
+
+// Upon ack, delete from retries
+mod[ack]
+    -> map(|(msg_id, _addr)| hydroflow::util::PersistenceKeyed::Delete(msg_id))
+    -> retries;
+
+// Occasionally retry
+source_interval(Duration::from_secs(5)) -> [1]gate;
+retries -> [0]gate;
+gate = cross_join::<'tick, 'tick>() 
+    -> map(|( (msg_id, (payload, addr)), _)| (RetryMsg{msg_id, payload}, addr)) -> mod_out;
+
+mod_out = union() -> mod;

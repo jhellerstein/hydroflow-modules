@@ -1,0 +1,4 @@
+// respond to heartbeats
+mod[msg] -> map(|(addr,)| (Message::HeartbeatResponse, addr)) -> mod;
+mod[response] -> null();
+mod[disconnect] -> for_each(|_| panic!("disconnected due to delayed heartbeat response!"));
